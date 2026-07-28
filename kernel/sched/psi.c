@@ -1058,6 +1058,7 @@ void psi_memstall_enter(unsigned long *flags)
 	struct rq_flags rf;
 	struct rq *rq;
 
+	*flags = 0;
 	if (static_branch_likely(&psi_disabled))
 		return;
 
