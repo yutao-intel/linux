@@ -2107,7 +2107,7 @@ void __bpf_trace_run(struct bpf_raw_tp_link *link, u64 *args)
 	struct bpf_prog *prog = link->link.prog;
 	bool sleepable = prog->sleepable;
 	struct bpf_run_ctx *old_run_ctx;
-	struct bpf_trace_run_ctx run_ctx;
+	struct bpf_trace_run_ctx run_ctx = {};
 
 	if (sleepable) {
 		scp = rcu_read_lock_tasks_trace();
