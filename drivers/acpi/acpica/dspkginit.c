@@ -196,6 +196,9 @@ acpi_ds_build_internal_package_obj(struct acpi_walk_state *walk_state,
 				obj_desc->package.elements[i] =
 				    ACPI_CAST_PTR(union acpi_operand_object,
 						  arg->common.node);
+
+				/* Package elements need their own reference to shared objects */
+				acpi_ut_add_reference(obj_desc->package.elements[i]);
 			}
 		} else {
 			status =
