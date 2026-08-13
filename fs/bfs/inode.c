@@ -129,6 +129,21 @@ static struct bfs_inode *find_inode(struct super_block *sb, u16 ino, struct buff
 	return (struct bfs_inode *)(*p)->b_data +  ino % BFS_INODES_PER_BLOCK;
 }
 
+static int bfs_prepare_write_buffer(struct buffer_head *bh)
+{
+	int err = 0;
+
+	lock_buffer(bh);
+	if (!buffer_uptodate(bh)) {
+		err = __bh_read(bh, 0, true);
+		if (err)
+			return err;
+		lock_buffer(bh);
+	}
+
+	return 0;
+}
+
 static int bfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	struct bfs_sb_info *info = BFS_SB(inode->i_sb);
@@ -145,6 +160,9 @@ static int bfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 		return PTR_ERR(di);
 
 	mutex_lock(&info->bfs_lock);
+	err = bfs_prepare_write_buffer(bh);
+	if (err)
+		goto out;
 
 	if (ino == BFS_ROOT_INO)
 		di->i_vtype = cpu_to_le32(BFS_VDIR);
@@ -165,16 +183,19 @@ static int bfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 	di->i_eoffset = cpu_to_le32(i_sblock * BFS_BSIZE + inode->i_size - 1);
 
 	mark_buffer_dirty(bh);
+	unlock_buffer(bh);
 	if (wbc->sync_mode == WB_SYNC_ALL) {
 		sync_dirty_buffer(bh);
 		if (buffer_req(bh) && !buffer_uptodate(bh))
 			err = -EIO;
 	}
+
+
+out:
 	brelse(bh);
 	mutex_unlock(&info->bfs_lock);
 	return err;
 }
-
 static void bfs_evict_inode(struct inode *inode)
 {
 	unsigned long ino = inode->i_ino;
@@ -200,11 +221,17 @@ static void bfs_evict_inode(struct inode *inode)
 		return;
 
 	mutex_lock(&info->bfs_lock);
+	if (bfs_prepare_write_buffer(bh))
+		goto out;
 	/* clear on-disk inode */
 	memset(di, 0, sizeof(struct bfs_inode));
 	mark_buffer_dirty(bh);
-	brelse(bh);
+	unlock_buffer(bh);
 
+
+
+out:
+	brelse(bh);
 	if (bi->i_dsk_ino) {
 		if (bi->i_sblock)
 			info->si_freeb += bi->i_eblock + 1 - bi->i_sblock;

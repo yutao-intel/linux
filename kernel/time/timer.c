@@ -2483,17 +2483,27 @@ void update_process_times(int user_tick)
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
-static void migrate_timer_list(struct timer_base *new_base, struct hlist_head *head)
+static int migrate_timer_list(struct timer_base *new_base, struct hlist_head *head)
 {
 	struct timer_list *timer;
 	int cpu = new_base->cpu;
 
 	while (!hlist_empty(head)) {
 		timer = hlist_entry(head->first, struct timer_list, entry);
+		/*
+		 * The hotplug walk owns the bucket lock, so the head entry must
+		 * still be hashed. Abort the CPU down operation rather than
+		 * trying to recover from untrusted list state.
+		 */
+		if (WARN_ON_ONCE(!timer->entry.pprev))
+			return -EINVAL;
+
 		detach_timer(timer, false);
 		timer->flags = (timer->flags & ~TIMER_BASEMASK) | cpu;
 		internal_add_timer(new_base, timer);
 	}
+
+	return 0;
 }
 
 int timers_prepare_cpu(unsigned int cpu)
@@ -2516,7 +2526,7 @@ int timers_dead_cpu(unsigned int cpu)
 {
 	struct timer_base *old_base;
 	struct timer_base *new_base;
-	int b, i;
+	int b, i, ret = 0;
 
 	for (b = 0; b < NR_BASES; b++) {
 		old_base = per_cpu_ptr(&timer_bases[b], cpu);
@@ -2537,12 +2547,18 @@ int timers_dead_cpu(unsigned int cpu)
 		WARN_ON_ONCE(old_base->running_timer);
 		old_base->running_timer = NULL;
 
-		for (i = 0; i < WHEEL_SIZE; i++)
-			migrate_timer_list(new_base, old_base->vectors + i);
+		for (i = 0; i < WHEEL_SIZE; i++) {
+			ret = migrate_timer_list(new_base, old_base->vectors + i);
+			if (ret)
+				break;
+		}
 
 		raw_spin_unlock(&old_base->lock);
 		raw_spin_unlock_irq(&new_base->lock);
 		put_cpu_ptr(&timer_bases);
+
+		if (ret)
+			return ret;
 	}
 	return 0;
 }
