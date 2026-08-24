@@ -34,6 +34,8 @@
 
 #include "virtgpu_drv.h"
 
+static void virtio_gpu_release_resources(struct drm_device *dev, void *data);
+
 static void virtio_gpu_config_changed_work_func(struct work_struct *work)
 {
 	struct virtio_gpu_device *vgdev =
@@ -270,6 +272,11 @@ int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev)
 		goto err_vbufs;
 	}
 
+	ret = drmm_add_action_or_reset(dev, virtio_gpu_release_resources,
+					      vgdev);
+	if (ret)
+		goto err_vbufs;
+
 	/* get display info */
 	virtio_cread_le(vgdev->vdev, struct virtio_gpu_config,
 			num_scanouts, &num_scanouts);
@@ -324,7 +331,6 @@ err_reset_device:
 	virtio_reset_device(vgdev->vdev);
 	virtio_gpu_modeset_fini(vgdev);
 err_scanouts:
-	virtio_gpu_free_vbufs(vgdev);
 err_vbufs:
 	vgdev->vdev->config->del_vqs(vgdev->vdev);
 err_vqs:
@@ -340,6 +346,19 @@ static void virtio_gpu_cleanup_cap_cache(struct virtio_gpu_device *vgdev)
 		kfree(cache_ent->caps_cache);
 		kfree(cache_ent);
 	}
+}
+
+static void virtio_gpu_release_resources(struct drm_device *dev, void *data)
+{
+	struct virtio_gpu_device *vgdev = data;
+
+	virtio_gpu_cleanup_cap_cache(vgdev);
+
+	if (vgdev->has_host_visible)
+		drm_mm_takedown(&vgdev->host_visible_mm);
+
+	if (vgdev->vbufs)
+		virtio_gpu_free_vbufs(vgdev);
 }
 
 void virtio_gpu_deinit(struct drm_device *dev)
@@ -364,11 +383,6 @@ void virtio_gpu_release(struct drm_device *dev)
 		return;
 
 	virtio_gpu_modeset_fini(vgdev);
-	virtio_gpu_free_vbufs(vgdev);
-	virtio_gpu_cleanup_cap_cache(vgdev);
-
-	if (vgdev->has_host_visible)
-		drm_mm_takedown(&vgdev->host_visible_mm);
 }
 
 int virtio_gpu_driver_open(struct drm_device *dev, struct drm_file *file)
