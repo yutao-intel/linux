@@ -68,6 +68,20 @@ static void virtio_gpu_init_vq(struct virtio_gpu_queue *vgvq,
 	INIT_WORK(&vgvq->dequeue_work, work_func);
 }
 
+static void virtio_gpu_takedown_host_visible_mm(struct drm_device *dev,
+						void *data)
+{
+	struct virtio_gpu_device *vgdev = dev->dev_private;
+	struct drm_mm_node *node, *next;
+
+	spin_lock(&vgdev->host_visible_lock);
+	drm_mm_for_each_node_safe(node, next, &vgdev->host_visible_mm)
+		drm_mm_remove_node(node);
+	spin_unlock(&vgdev->host_visible_lock);
+
+	drm_mm_takedown(&vgdev->host_visible_mm);
+}
+
 static void virtio_gpu_get_capsets(struct virtio_gpu_device *vgdev,
 				   int num_capsets)
 {
@@ -196,6 +210,12 @@ int virtio_gpu_init(struct virtio_device *vdev, struct drm_device *dev)
 		drm_mm_init(&vgdev->host_visible_mm,
 			    (unsigned long)vgdev->host_visible_region.addr,
 			    (unsigned long)vgdev->host_visible_region.len);
+
+		ret = drmm_add_action_or_reset(dev,
+					       virtio_gpu_takedown_host_visible_mm,
+					       NULL);
+		if (ret)
+			goto err_vqs;
 	}
 
 	if (virtio_has_feature(vgdev->vdev, VIRTIO_GPU_F_CONTEXT_INIT))
@@ -293,10 +313,10 @@ void virtio_gpu_deinit(struct drm_device *dev)
 {
 	struct virtio_gpu_device *vgdev = dev->dev_private;
 
-	flush_work(&vgdev->obj_free_work);
+	flush_work(&vgdev->config_changed_work);
 	flush_work(&vgdev->ctrlq.dequeue_work);
 	flush_work(&vgdev->cursorq.dequeue_work);
-	flush_work(&vgdev->config_changed_work);
+	flush_work(&vgdev->obj_free_work);
 	virtio_reset_device(vgdev->vdev);
 	vgdev->vdev->config->del_vqs(vgdev->vdev);
 }
@@ -311,9 +331,6 @@ void virtio_gpu_release(struct drm_device *dev)
 	virtio_gpu_modeset_fini(vgdev);
 	virtio_gpu_free_vbufs(vgdev);
 	virtio_gpu_cleanup_cap_cache(vgdev);
-
-	if (vgdev->has_host_visible)
-		drm_mm_takedown(&vgdev->host_visible_mm);
 }
 
 int virtio_gpu_driver_open(struct drm_device *dev, struct drm_file *file)

@@ -12,7 +12,7 @@ static void virtio_gpu_vram_free(struct drm_gem_object *obj)
 	struct virtio_gpu_object_vram *vram = to_virtio_gpu_vram(bo);
 	bool unmap;
 
-	if (bo->created) {
+	if (bo->created && !drm_dev_is_unplugged(obj->dev)) {
 		spin_lock(&vgdev->host_visible_lock);
 		unmap = drm_mm_node_allocated(&vram->vram_node);
 		spin_unlock(&vgdev->host_visible_lock);
@@ -24,6 +24,8 @@ static void virtio_gpu_vram_free(struct drm_gem_object *obj)
 		virtio_gpu_notify(vgdev);
 		return;
 	}
+
+	virtio_gpu_cleanup_object(bo);
 }
 
 static const struct vm_operations_struct virtio_gpu_vram_vm_ops = {

@@ -188,7 +188,8 @@ static void virtgpu_dma_buf_unmap(struct virtio_gpu_object *bo)
 	dma_resv_assert_held(attach->dmabuf->resv);
 
 	if (bo->created) {
-		virtio_gpu_detach_object_fenced(bo);
+		if (!drm_dev_is_unplugged(bo->base.base.dev))
+			virtio_gpu_detach_object_fenced(bo);
 
 		if (bo->sgt)
 			dma_buf_unmap_attachment(attach, bo->sgt,
@@ -215,7 +216,7 @@ static void virtgpu_dma_buf_free_obj(struct drm_gem_object *obj)
 		dma_buf_put(dmabuf);
 	}
 
-	if (bo->created) {
+	if (bo->created && !drm_dev_is_unplugged(obj->dev)) {
 		virtio_gpu_cmd_unref_resource(vgdev, bo);
 		virtio_gpu_notify(vgdev);
 		return;
