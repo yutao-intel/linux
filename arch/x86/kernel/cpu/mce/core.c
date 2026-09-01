@@ -1735,12 +1735,16 @@ int memory_failure(unsigned long pfn, int flags)
 static unsigned long check_interval = INITIAL_CHECK_INTERVAL;
 
 static DEFINE_PER_CPU(unsigned long, mce_next_interval); /* in jiffies */
+static DEFINE_PER_CPU(bool, mce_timer_enabled);
 static DEFINE_PER_CPU(struct timer_list, mce_timer);
 
 static void __start_timer(struct timer_list *t, unsigned long interval)
 {
 	unsigned long when = jiffies + interval;
 	unsigned long flags;
+
+	if (!__this_cpu_read(mce_timer_enabled))
+		return;
 
 	local_irq_save(flags);
 
@@ -1808,10 +1812,17 @@ void mce_timer_kick(bool storm)
 		__this_cpu_write(mce_next_interval, check_interval * HZ);
 }
 
+static void mce_timer_disable_cpu(void *unused)
+{
+	__this_cpu_write(mce_timer_enabled, false);
+}
+
 /* Must not be called in IRQ context where timer_delete_sync() can deadlock */
 static void mce_timer_delete_all(void)
 {
 	int cpu;
+
+	on_each_cpu(mce_timer_disable_cpu, NULL, 1);
 
 	for_each_online_cpu(cpu)
 		timer_delete_sync(&per_cpu(mce_timer, cpu));
@@ -2084,14 +2095,16 @@ static void __mcheck_cpu_setup_timer(void)
 {
 	struct timer_list *t = this_cpu_ptr(&mce_timer);
 
-	timer_setup(t, mce_timer_fn, TIMER_PINNED);
+	if (!t->function)
+		timer_setup(t, mce_timer_fn, TIMER_PINNED);
 }
 
 static void __mcheck_cpu_init_timer(void)
 {
 	struct timer_list *t = this_cpu_ptr(&mce_timer);
 
-	timer_setup(t, mce_timer_fn, TIMER_PINNED);
+	__this_cpu_write(mce_timer_enabled, true);
+	__mcheck_cpu_setup_timer();
 	mce_start_timer(t);
 }
 
@@ -2266,6 +2279,7 @@ void mcheck_cpu_init(struct cpuinfo_x86 *c)
 
 	mca_cfg.initialized = 1;
 
+	__this_cpu_write(mce_timer_enabled, true);
 	__mcheck_cpu_setup_timer();
 	__mcheck_cpu_init_generic();
 	__mcheck_cpu_init_vendor(c);
@@ -2769,6 +2783,7 @@ static int mce_cpu_online(unsigned int cpu)
 	mce_device_create(cpu);
 	mce_threshold_create_device(cpu);
 	mce_reenable_cpu();
+	__this_cpu_write(mce_timer_enabled, true);
 	mce_start_timer(t);
 	return 0;
 }
@@ -2777,6 +2792,7 @@ static int mce_cpu_pre_down(unsigned int cpu)
 {
 	struct timer_list *t = this_cpu_ptr(&mce_timer);
 
+	__this_cpu_write(mce_timer_enabled, false);
 	mce_disable_cpu();
 	timer_delete_sync(t);
 	mce_threshold_remove_device(cpu);
