@@ -363,7 +363,10 @@ static long udmabuf_create(struct miscdevice *device,
 	if (!ubuf)
 		return -ENOMEM;
 
-	pglimit = ((u64)size_limit_mb * 1024 * 1024) >> PAGE_SHIFT;
+	pglimit = min_t(pgoff_t, ((u64)size_limit_mb * 1024 * 1024) >> PAGE_SHIFT,
+			UINT_MAX);
+	/* Keep all page-pointer arrays below the kvmalloc() warning limit. */
+	pglimit = min_t(pgoff_t, pglimit, INT_MAX / sizeof(*ubuf->pages));
 	for (i = 0; i < head->count; i++) {
 		pgoff_t subpgcnt;
 
@@ -373,7 +376,8 @@ static long udmabuf_create(struct miscdevice *device,
 			goto err_noinit;
 
 		subpgcnt = list[i].size >> PAGE_SHIFT;
-		pgcnt += subpgcnt;
+		if (check_add_overflow(pgcnt, subpgcnt, &pgcnt))
+			goto err_noinit;
 		if (pgcnt > pglimit)
 			goto err_noinit;
 
